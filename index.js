@@ -8,6 +8,7 @@ import multer from "multer";
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import { Readable } from 'stream';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,29 +17,14 @@ const app = express();
 const port = process.env.PORT || 3000;
 env.config();
 
-// Create uploads directory if it doesn't exist
-const uploadDir = join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-
-const upload = multer({ storage });
+// Use memory storage for Vercel serverless compatibility
+const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(cors());
 
-// Serve static files from the uploads directory
-app.use('/uploads', express.static(uploadDir));
+// Note: We no longer serve local uploads; Cloudinary returns hosted URLs.
 
 const { Pool } = pg;
 
@@ -126,37 +112,33 @@ app.post(
   ]),
   async (req, res) => {
     try {
-      let result = {
-        img1: null,
-        img2: null,
-        img3: null,
-      };
-      console.log("/upload received files:", Object.keys(req.files || {}));
-      if (req.files?.img1) {
-        console.log("img1 path:", req.files.img1[0].path);
-      }
+      const uploadFromBuffer = (buffer) =>
+        new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder: "my_images", resource_type: "auto" },
+            (error, result) => {
+              if (error) return reject(error);
+              resolve(result);
+            }
+          );
+          Readable.from(buffer).pipe(stream);
+        });
 
-      if (req.files?.img1) {
-        const upload1 = await cloudinary.uploader.upload(
-          req.files.img1[0].path,
-          { folder: "my_images", resource_type: "auto" }
-        );
+      let result = { img1: null, img2: null, img3: null };
+      console.log("/upload received files:", Object.keys(req.files || {}));
+
+      if (req.files?.img1?.[0]?.buffer) {
+        const upload1 = await uploadFromBuffer(req.files.img1[0].buffer);
         result.img1 = upload1.secure_url;
       }
 
-      if (req.files?.img2) {
-        const upload2 = await cloudinary.uploader.upload(
-          req.files.img2[0].path,
-          { folder: "my_images", resource_type: "auto" }
-        );
+      if (req.files?.img2?.[0]?.buffer) {
+        const upload2 = await uploadFromBuffer(req.files.img2[0].buffer);
         result.img2 = upload2.secure_url;
       }
 
-      if (req.files?.img3) {
-        const upload3 = await cloudinary.uploader.upload(
-          req.files.img3[0].path,
-          { folder: "my_images", resource_type: "auto" }
-        );
+      if (req.files?.img3?.[0]?.buffer) {
+        const upload3 = await uploadFromBuffer(req.files.img3[0].buffer);
         result.img3 = upload3.secure_url;
       }
 
